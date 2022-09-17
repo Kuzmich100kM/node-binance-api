@@ -83,7 +83,8 @@ let api = function Binance( options = {} ) {
         orderCount1m: 0,
         orderCount1h: 0,
         orderCount1d: 0,
-        timeOffset: 0
+        timeOffset: 0,
+        reconnectCounter: 0,
     };
     Binance.socketHeartbeatInterval = null;
     if ( options ) setOptions( options );
@@ -824,7 +825,7 @@ let api = function Binance( options = {} ) {
      * @param {string} reason - string with the response
      * @return {undefined}
      */
-    const handleFuturesSocketClose = function ( reconnect, code, reason ) {
+    const handleFuturesSocketClose = function ( reconnect, reason, code ) {
         delete Binance.futuresSubscriptions[this.endpoint];
         if ( Binance.futuresSubscriptions && Object.keys( Binance.futuresSubscriptions ).length === 0 ) {
             clearInterval( Binance.socketHeartbeatInterval );
@@ -832,11 +833,12 @@ let api = function Binance( options = {} ) {
         Binance.options.log( 'Futures WebSocket closed: ' + this.endpoint +
           ( code ? ' (' + code + ')' : '' ) +
           ( reason ? ' ' + reason : '' ) );
+        console.log(this.endpoint, Binance.options.reconnect, this.reconnect, reconnect)
         if ( Binance.options.reconnect && this.reconnect && reconnect ) {
-            if ( this.endpoint && parseInt( this.endpoint.length, 10 ) === 60 ) Binance.options.log( 'Futures account data WebSocket reconnecting...' );
+            if ( this.endpoint && parseInt( this.endpoint.length, 10 ) >= 60 ) Binance.options.log( 'Futures account data WebSocket reconnecting...' );
             else Binance.options.log( 'Futures WebSocket reconnecting: ' + this.endpoint + '...' );
             try {
-                reconnect();
+                reconnect(reason);
             } catch ( error ) {
                 Binance.options.log( 'Futures WebSocket reconnect error: ' + error.message );
             }
@@ -903,7 +905,7 @@ let api = function Binance( options = {} ) {
         ws.on( 'open', handleFuturesSocketOpen.bind( ws, params.openCallback ) );
         ws.on( 'pong', handleFuturesSocketHeartbeat );
         ws.on( 'error', handleFuturesSocketError );
-        ws.on( 'close', handleFuturesSocketClose.bind( ws, params.reconnect ) );
+        ws.on( 'close', handleFuturesSocketClose.bind( ws, params.reconnect, "futuresSubscribeSingle" ) );
         ws.on( 'message', data => {
             try {
                 callback( JSONbig.parse( data ) );
@@ -958,7 +960,7 @@ let api = function Binance( options = {} ) {
         ws.on( 'open', handleFuturesSocketOpen.bind( ws, params.openCallback ) );
         ws.on( 'pong', handleFuturesSocketHeartbeat );
         ws.on( 'error', handleFuturesSocketError );
-        ws.on( 'close', handleFuturesSocketClose.bind( ws, params.reconnect ) );
+        ws.on( 'close', handleFuturesSocketClose.bind( ws, params.reconnect, "futuresSubscribe" ) );
         ws.on( 'message', data => {
             try {
                 callback( JSON.parse( data ).data );
@@ -2584,6 +2586,15 @@ let api = function Binance( options = {} ) {
     const isArrayUnique = array => {
         return new Set( array ).size === array.length;
     };
+
+    const reconnectFunc = (cb, reason) => {
+        if ( Binance.options.reconnect ) {
+            setTimeout(cb, Binance.info.reconnectCounter)
+            
+            if(Binance.info.reconnectCounter < 10000) Binance.info.reconnectCounter += 1000    
+        }
+    };
+
     return {
         /**
         * Gets depth cache for given symbol
@@ -4876,7 +4887,8 @@ let api = function Binance( options = {} ) {
          */
         futuresAggTradeStream: function futuresAggTradeStream( symbols, callback ) {
             let reconnect = () => {
-                if ( Binance.options.reconnect ) futuresAggTradeStream( symbols, callback );
+                reconnectFunc (()=> futuresAggTradeStream(symbols, callback))
+               // if ( Binance.options.reconnect ) futuresAggTradeStream( symbols, callback );
             };
             let subscription, cleanCallback = data => callback( fAggTradeConvertData( data ) );
             if ( Array.isArray( symbols ) ) {
@@ -4903,7 +4915,8 @@ let api = function Binance( options = {} ) {
                 symbol = false;
             }
             let reconnect = () => {
-                if ( Binance.options.reconnect ) fMarkPriceStream( symbol, callback, speed );
+                reconnectFunc (()=> fMarkPriceStream(symbol, callback, speed))
+               // if ( Binance.options.reconnect ) fMarkPriceStream( symbol, callback, speed );
             };
             const endpoint = symbol ? `${ symbol.toLowerCase() }@markPrice` : '!markPrice@arr'
             let subscription = futuresSubscribeSingle( endpoint + speed, data => callback( fMarkPriceConvertData( data ) ), { reconnect } );
@@ -4922,7 +4935,8 @@ let api = function Binance( options = {} ) {
                 symbol = false;
             }
             let reconnect = () => {
-                if ( Binance.options.reconnect ) fLiquidationStream( symbol, callback );
+                reconnectFunc (()=> fLiquidationStream(symbol, callback))
+                //if ( Binance.options.reconnect ) fLiquidationStream( symbol, callback );
             };
             const endpoint = symbol ? `${ symbol.toLowerCase() }@forceOrder` : '!forceOrder@arr'
             let subscription = futuresSubscribeSingle( endpoint, data => callback( fLiquidationConvertData( data ) ), { reconnect } );
@@ -4941,7 +4955,9 @@ let api = function Binance( options = {} ) {
                 symbol = false;
             }
             let reconnect = () => {
-                if ( Binance.options.reconnect ) fTickerStream( symbol, callback );
+                reconnectFunc (()=> fTickerStream(symbol, callback))
+                
+                //if ( Binance.options.reconnect ) fTickerStream( symbol, callback );
             };
             const endpoint = symbol ? `${ symbol.toLowerCase() }@ticker` : '!ticker@arr'
             let subscription = futuresSubscribeSingle( endpoint, data => callback( fTickerConvertData( data ) ), { reconnect } );
@@ -4959,9 +4975,11 @@ let api = function Binance( options = {} ) {
                 callback = symbol;
                 symbol = false;
             }
-            let reconnect = () => {
-                if ( Binance.options.reconnect ) fMiniTickerStream( symbol, callback );
-            };
+            let reconnect = (reason) => {
+                reconnectFunc (()=> fMiniTickerStream(symbol, callback))
+                //if ( Binance.options.reconnect ) setTimeout(fMiniTickerStream, 10000,symbol, callback)
+            }
+               
             const endpoint = symbol ? `${ symbol.toLowerCase() }@miniTicker` : '!miniTicker@arr'
             let subscription = futuresSubscribeSingle( endpoint, data => callback( fMiniTickerConvertData( data ) ), { reconnect } );
             return subscription.endpoint;
@@ -4979,7 +4997,8 @@ let api = function Binance( options = {} ) {
                 symbol = false;
             }
             let reconnect = () => {
-                if ( Binance.options.reconnect ) fBookTickerStream( symbol, callback );
+                reconnectFunc (()=> fBookTickerStream(symbol, callback))
+                //if ( Binance.options.reconnect ) fBookTickerStream( symbol, callback );
             };
             const endpoint = symbol ? `${ symbol.toLowerCase() }@bookTicker` : '!bookTicker'
             let subscription = futuresSubscribeSingle( endpoint, data => callback( fBookTickerConvertData( data ) ), { reconnect } );
@@ -4996,7 +5015,8 @@ let api = function Binance( options = {} ) {
          */
         futuresChart: async function futuresChart( symbols, interval, callback, limit = 500 ) {
             let reconnect = () => {
-                if ( Binance.options.reconnect ) futuresChart( symbols, interval, callback, limit );
+                reconnectFunc (()=> futuresChart( symbols, interval, callback, limit ))
+                //if ( Binance.options.reconnect ) futuresChart( symbols, interval, callback, limit );
             };
 
             let futuresChartInit = symbol => {
@@ -5059,8 +5079,9 @@ let api = function Binance( options = {} ) {
          * @return {string} the websocket endpoint
          */
         futuresCandlesticks: function futuresCandlesticks( symbols, interval, callback ) {
-            let reconnect = () => {
-                if ( Binance.options.reconnect ) futuresCandlesticks( symbols, interval, callback );
+            let reconnect = (reason) => {
+                reconnectFunc (()=> futuresCandlesticks( symbols, interval, callback ), reason)
+                // if ( Binance.options.reconnect ) futuresCandlesticks( symbols, interval, callback );
             };
             let subscription;
             if ( Array.isArray( symbols ) ) {
@@ -5123,7 +5144,8 @@ let api = function Binance( options = {} ) {
          */
         deliveryAggTradeStream: function deliveryAggTradeStream( symbols, callback ) {
             let reconnect = () => {
-                if ( Binance.options.reconnect ) deliveryAggTradeStream( symbols, callback );
+                reconnectFunc (()=> deliveryAggTradeStream( symbols, callback ))
+                //if ( Binance.options.reconnect ) deliveryAggTradeStream( symbols, callback );
             };
             let subscription, cleanCallback = data => callback( dAggTradeConvertData( data ) );
             if ( Array.isArray( symbols ) ) {
@@ -5150,7 +5172,8 @@ let api = function Binance( options = {} ) {
                 symbol = false;
             }
             let reconnect = () => {
-                if ( Binance.options.reconnect ) dMarkPriceStream( symbol, callback );
+                reconnectFunc (()=> dMarkPriceStream( symbol, callback, speed ))
+                //if ( Binance.options.reconnect ) dMarkPriceStream( symbol, callback );
             };
             const endpoint = symbol ? `${ symbol.toLowerCase() }@markPrice` : '!markPrice@arr'
             let subscription = deliverySubscribeSingle( endpoint + speed, data => callback( dMarkPriceConvertData( data ) ), { reconnect } );
@@ -5169,7 +5192,8 @@ let api = function Binance( options = {} ) {
                 symbol = false;
             }
             let reconnect = () => {
-                if ( Binance.options.reconnect ) dLiquidationStream( symbol, callback );
+                reconnectFunc (()=> dLiquidationStream( symbol, callback ))
+                //if ( Binance.options.reconnect ) dLiquidationStream( symbol, callback );
             };
             const endpoint = symbol ? `${ symbol.toLowerCase() }@forceOrder` : '!forceOrder@arr'
             let subscription = deliverySubscribeSingle( endpoint, data => callback( dLiquidationConvertData( data ) ), { reconnect } );
@@ -5188,7 +5212,8 @@ let api = function Binance( options = {} ) {
                 symbol = false;
             }
             let reconnect = () => {
-                if ( Binance.options.reconnect ) dTickerStream( symbol, callback );
+                reconnectFunc (()=> dTickerStream( symbol, callback ))
+                //if ( Binance.options.reconnect ) dTickerStream( symbol, callback );
             };
             const endpoint = symbol ? `${ symbol.toLowerCase() }@ticker` : '!ticker@arr'
             let subscription = deliverySubscribeSingle( endpoint, data => callback( dTickerConvertData( data ) ), { reconnect } );
@@ -5207,7 +5232,8 @@ let api = function Binance( options = {} ) {
                 symbol = false;
             }
             let reconnect = () => {
-                if ( Binance.options.reconnect ) dMiniTickerStream( symbol, callback );
+                reconnectFunc (()=> dMiniTickerStream( symbol, callback ))
+                //if ( Binance.options.reconnect ) dMiniTickerStream( symbol, callback );
             };
             const endpoint = symbol ? `${ symbol.toLowerCase() }@miniTicker` : '!miniTicker@arr'
             let subscription = deliverySubscribeSingle( endpoint, data => callback( dMiniTickerConvertData( data ) ), { reconnect } );
@@ -5226,7 +5252,8 @@ let api = function Binance( options = {} ) {
                 symbol = false;
             }
             let reconnect = () => {
-                if ( Binance.options.reconnect ) dBookTickerStream( symbol, callback );
+                reconnectFunc (()=> dBookTickerStream( symbol, callback ))
+                //if ( Binance.options.reconnect ) dBookTickerStream( symbol, callback );
             };
             const endpoint = symbol ? `${ symbol.toLowerCase() }@bookTicker` : '!bookTicker'
             let subscription = deliverySubscribeSingle( endpoint, data => callback( dBookTickerConvertData( data ) ), { reconnect } );
@@ -5243,7 +5270,8 @@ let api = function Binance( options = {} ) {
          */
         deliveryChart: async function deliveryChart( symbols, interval, callback, limit = 500 ) {
             let reconnect = () => {
-                if ( Binance.options.reconnect ) deliveryChart( symbols, interval, callback, limit );
+                reconnectFunc (()=> deliveryChart( symbols, interval, callback, limit ))
+                //if ( Binance.options.reconnect ) deliveryChart( symbols, interval, callback, limit );
             };
 
             let deliveryChartInit = symbol => {
@@ -5307,7 +5335,8 @@ let api = function Binance( options = {} ) {
          */
         deliveryCandlesticks: function deliveryCandlesticks( symbols, interval, callback ) {
             let reconnect = () => {
-                if ( Binance.options.reconnect ) deliveryCandlesticks( symbols, interval, callback );
+                reconnectFunc (()=> deliveryCandlesticks( symbols, interval, callback ))
+                // if ( Binance.options.reconnect ) deliveryCandlesticks( symbols, interval, callback );
             };
             let subscription;
             if ( Array.isArray( symbols ) ) {
@@ -5332,9 +5361,18 @@ let api = function Binance( options = {} ) {
              */
             userData: function userData( callback, execution_callback = false, subscribed_callback = false, list_status_callback = false ) {
                 let reconnect = () => {
-                    if ( Binance.options.reconnect ) userData( callback, execution_callback, subscribed_callback );
+                    reconnectFunc (()=>userData( callback, execution_callback, subscribed_callback, list_status_callback))
+                    //if ( Binance.options.reconnect ) userData( callback, execution_callback, subscribed_callback );
                 };
                 apiRequest( base + 'v3/userDataStream', {}, function ( error, response ) {
+                    if ( error ) {
+                        if ( error.code &&( error.code === 'ESOCKETTIMEDOUT' || error.code === "ENOTFOUND") )
+                            return reconnect();
+                        else if ( error.body ) {
+                            subscribed_callback( JSON.parse( error.body ) );
+                            return;
+                        }
+                    }
                     Binance.options.listenKey = response.listenKey;
                     setTimeout( function userDataKeepAlive() { // keepalive
                         try {
@@ -5364,9 +5402,18 @@ let api = function Binance( options = {} ) {
              */
             userMarginData: function userMarginData( callback, execution_callback = false, subscribed_callback = false, list_status_callback = false ) {
                 let reconnect = () => {
-                    if ( Binance.options.reconnect ) userMarginData( callback, execution_callback, subscribed_callback );
+                    reconnectFunc (()=> userMarginData( callback, execution_callback, subscribed_callback, list_status_callback ))
+                    //if ( Binance.options.reconnect ) userMarginData( callback, execution_callback, subscribed_callback );
                 };
                 apiRequest( sapi + 'v1/userDataStream', {}, function ( error, response ) {
+                    if ( error ) {
+                        if ( error.code &&( error.code === 'ESOCKETTIMEDOUT' || error.code === "ENOTFOUND") )
+                            return reconnect();
+                        else if ( error.body ) {
+                            subscribed_callback( JSON.parse( error.body ) );
+                            return;
+                        }
+                    }
                     Binance.options.listenMarginKey = response.listenKey;
                     setTimeout( function userDataKeepAlive() { // keepalive
                         try {
@@ -5393,14 +5440,27 @@ let api = function Binance( options = {} ) {
              * @param {function} order_update_callback
              * @param {Function} subscribed_callback - subscription callback
              */
-            userFutureData: function userFutureData( margin_call_callback, account_update_callback = undefined, order_update_callback = undefined, subscribed_callback = undefined, account_config_update_callback = undefined ) {
+            userFutureData: function userFutureDataFunc( margin_call_callback, account_update_callback = undefined, order_update_callback = undefined, subscribed_callback = undefined, account_config_update_callback = undefined ) {
                 const url = ( Binance.options.test ) ? fapiTest : fapi;
+                let isReconnect = false
 
-                let reconnect = () => {
-                    if ( Binance.options.reconnect ) userFutureData( margin_call_callback, account_update_callback, order_update_callback, subscribed_callback )
+                reconnectFunc (()=> userFutureDataFunc(margin_call_callback, account_update_callback, order_update_callback, subscribed_callback, account_config_update_callback))
+                    isReconnect = true
                 }
 
                 apiRequest( url + 'v1/listenKey', {}, function ( error, response ) {
+                    if ( error ) {
+                        if ( error.code &&( error.code === 'ESOCKETTIMEDOUT' || error.code === "ENOTFOUND") ) {
+                           console.log("+++", new Date().getSeconds(), "apiRequest | isReconnect :>>", isReconnect)
+                           !isReconnect && reconnect("INNER apiRequest");
+                           return;
+                        } 
+                        else if ( error.body ) {
+                            subscribed_callback( JSON.parse( error.body ) );
+                            return;
+                        }
+                    } else {
+                        Binance.info.reconnectCounter = 0
                     Binance.options.listenFutureKey = response.listenKey;
                     setTimeout( function userDataKeepAlive() { // keepalive
                         try {
@@ -5418,6 +5478,7 @@ let api = function Binance( options = {} ) {
                     Binance.options.future_order_update_callback = order_update_callback;
                     const subscription = futuresSubscribe( Binance.options.listenFutureKey, userFutureDataHandler, { reconnect } );
                     if ( subscribed_callback ) subscribed_callback( subscription.endpoint );
+                    }
                 }, 'POST' );
             },
 
@@ -5437,19 +5498,33 @@ let api = function Binance( options = {} ) {
                 const url = Binance.options.test ? dapiTest : dapi;
 
                 let reconnect = () => {
-                    if ( Binance.options.reconnect )
-                        userDeliveryData(
+                        reconnectFunc (()=> userDeliveryData(
                             margin_call_callback,
                             account_update_callback,
                             order_update_callback,
                             subscribed_callback
-                        );
+                        ))
+                        // if ( Binance.options.reconnect )
+                        // userDeliveryData(
+                        //     margin_call_callback,
+                        //     account_update_callback,
+                        //     order_update_callback,
+                        //     subscribed_callback
+                        // );
                 };
 
                 apiRequest(
                     url + "v1/listenKey",
                     {},
                     function ( error, response ) {
+                        if ( error ) {
+                            if ( error.code &&( error.code === 'ESOCKETTIMEDOUT' || error.code === "ENOTFOUND") )
+                                return reconnect();
+                            else if ( error.body ) {
+                                subscribed_callback( JSON.parse( error.body ) );
+                                return;
+                            }
+                        }
                         Binance.options.listenDeliveryKey = response.listenKey;
                         setTimeout( function userDataKeepAlive() {
                             // keepalive
@@ -5532,7 +5607,8 @@ let api = function Binance( options = {} ) {
              */
             depth: function depth ( symbols, callback ) {
                 let reconnect = () => {
-                    if ( Binance.options.reconnect ) depth( symbols, callback );
+                    reconnectFunc (()=> depth(symbols, callback))
+                    //if ( Binance.options.reconnect ) depth( symbols, callback );
                 };
                 let subscription;
                 if ( Array.isArray( symbols ) ) {
@@ -5557,7 +5633,8 @@ let api = function Binance( options = {} ) {
              */
             depthCache: function depthCacheFunction( symbols, callback, limit = 500 ) {
                 let reconnect = () => {
-                    if ( Binance.options.reconnect ) depthCacheFunction( symbols, callback, limit );
+                    reconnectFunc (()=> depthCacheFunction(symbols, callback, limit))
+                    //if ( Binance.options.reconnect ) depthCacheFunction( symbols, callback, limit );
                 };
 
                 let symbolDepthInit = symbol => {
@@ -5697,9 +5774,10 @@ let api = function Binance( options = {} ) {
              * @param {function} callback - callback function
              * @return {string} the websocket endpoint
              */
-            aggTrades: function trades( symbols, callback ) {
+            aggTrades: function aggTradesFunc( symbols, callback ) {
                 let reconnect = () => {
-                    if ( Binance.options.reconnect ) trades( symbols, callback );
+                    reconnectFunc (()=> aggTradesFunc(symbols, callback))
+                    //if ( Binance.options.reconnect ) trades( symbols, callback );
                 };
                 let subscription;
                 if ( Array.isArray( symbols ) ) {
@@ -5721,9 +5799,10 @@ let api = function Binance( options = {} ) {
             * @param {function} callback - callback function
             * @return {string} the websocket endpoint
             */
-            trades: function trades( symbols, callback ) {
+            trades: function tradesFunc( symbols, callback ) {
                 let reconnect = () => {
-                    if ( Binance.options.reconnect ) trades( symbols, callback );
+                    reconnectFunc (()=> tradesFunc(symbols, callback))
+                    //if ( Binance.options.reconnect ) trades( symbols, callback );
                 };
 
                 let subscription;
@@ -5750,7 +5829,8 @@ let api = function Binance( options = {} ) {
              */
             chart: function chart( symbols, interval, callback, limit = 500 ) {
                 let reconnect = () => {
-                    if ( Binance.options.reconnect ) chart( symbols, interval, callback, limit );
+                    reconnectFunc (()=> chart(symbols, interval, callback, limit))
+                    //if ( Binance.options.reconnect ) chart( symbols, interval, callback, limit );
                 };
 
                 let symbolChartInit = symbol => {
@@ -5817,7 +5897,8 @@ let api = function Binance( options = {} ) {
              */
             candlesticks: function candlesticks( symbols, interval, callback ) {
                 let reconnect = () => {
-                    if ( Binance.options.reconnect ) candlesticks( symbols, interval, callback );
+                    reconnectFunc (()=> candlestick(symbols, interval, callback))
+                    //if ( Binance.options.reconnect ) candlesticks( symbols, interval, callback );
                 };
 
                 /* If an array of symbols are sent we use a combined stream connection rather.
@@ -5844,7 +5925,8 @@ let api = function Binance( options = {} ) {
              */
             miniTicker: function miniTicker( callback ) {
                 let reconnect = () => {
-                    if ( Binance.options.reconnect ) miniTicker( callback );
+                    reconnectFunc (()=> miniTicker(callback))
+                   // if ( Binance.options.reconnect ) miniTicker( callback );
                 };
                 let subscription = subscribe( '!miniTicker@arr', function ( data ) {
                     let markets = {};
@@ -5876,7 +5958,8 @@ let api = function Binance( options = {} ) {
                     symbol = false;
                 }
                 let reconnect = () => {
-                    if ( Binance.options.reconnect ) bookTickerStream( symbol, callback );
+                    reconnectFunc (()=> bookTickerStream(symbol, callback))
+                   // if ( Binance.options.reconnect ) bookTickerStream( symbol, callback );
                 };
                 const endpoint = symbol ? `${ symbol.toLowerCase() }@bookTicker` : '!bookTicker'
                 let subscription = subscribe( endpoint, data => callback( fBookTickerConvertData( data ) ), reconnect );
@@ -5892,7 +5975,8 @@ let api = function Binance( options = {} ) {
              */
             prevDay: function prevDay( symbols, callback, singleCallback ) {
                 let reconnect = () => {
-                    if ( Binance.options.reconnect ) prevDay( symbols, callback, singleCallback );
+                    reconnectFunc (()=> prevDay(symbols, callback, singleCallback))
+                    //if ( Binance.options.reconnect ) prevDay( symbols, callback, singleCallback );
                 };
 
                 let subscription;
